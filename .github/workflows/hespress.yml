@@ -2,8 +2,20 @@ name: Bot Hespress Veille
 
 on:
   schedule:
-    - cron: '15 * * * *'
+    # Veille rapide toutes les 5 minutes
+    - cron: '*/5 * * * *'
+    # Tableau de synthèse à 03h00 heure du Maroc (02h00 UTC)
+    - cron: '0 2 * * *'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Mode à lancer (realtime = alerte directe, digest = tableau 3h)'
+        required: true
+        default: 'realtime'
+        type: choice
+        options:
+          - realtime
+          - digest
 
 permissions:
   contents: write
@@ -11,6 +23,7 @@ permissions:
 jobs:
   run-hespress:
     runs-on: ubuntu-latest
+
     steps:
       - name: Récupérer le dépôt
         uses: actions/checkout@v4
@@ -23,17 +36,30 @@ jobs:
       - name: Installer les dépendances
         run: pip install requests beautifulsoup4
 
+      - name: Déterminer le mode d'exécution
+        id: set_mode
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" = "0 2 * * *" ]; then
+            echo "mode=digest" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=${{ github.event.inputs.mode }}" >> $GITHUB_OUTPUT
+          else
+            echo "mode=realtime" >> $GITHUB_OUTPUT
+          fi
+
       - name: Lancer le bot Hespress
         env:
           HESPRESS_TELEGRAM_TOKEN: ${{ secrets.HESPRESS_TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python hespress_bot.py
+        run: python hespress_bot.py ${{ steps.set_mode.outputs.mode }}
 
-      - name: Sauvegarder l'historique Hespress
+      - name: Sauvegarder l'historique et le tampon quotidien
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           touch historique_hespress.txt
-          git add historique_hespress.txt
-          git diff-index --quiet HEAD || git commit -m "Mise à jour historique Hespress"
+          [ -f articles_du_jour.json ] || echo "[]" > articles_du_jour.json
+          git add historique_hespress.txt articles_du_jour.json
+          git diff-index --quiet HEAD || git commit -m "Mise à jour veille Hespress (${{ steps.set_mode.outputs.mode }})"
+          git pull --rebase origin main
           git push
