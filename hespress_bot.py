@@ -1,225 +1,275 @@
 import os
-import re
+import sys
+import json
+import html
 import unicodedata
+from datetime import datetime, timezone, timedelta
 import requests
 from bs4 import BeautifulSoup
 
-TOKEN = os.environ.get("HESPRESS_TELEGRAM_TOKEN")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "689274691")
-FICHIER_HISTORIQUE = "historique_hespress.txt"
+TOKEN = os.getenv("HESPRESS_TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "689274691")
 
-CATEGORIES = {
-    "dgsn": {
-        "bandeau": "ACTUALITÉ CIBLÉE DÉTECTÉE\n👮 SÉCURITÉ NATIONALE : NOUVELLE ACTUALITÉ DGSN !",
-        "domaine": "DGSN et sécurité nationale",
-        "profil": "DGSN / Sécurité publique",
-        "pertinence": "5/5",
-        "points": [
-            "Évolution ou mesure liée à la sûreté et à l'ordre public.",
-            "Impact opérationnel ou organisationnel pour les services de police.",
-            "À suivre pour l'actualité institutionnelle et sécuritaire.",
-        ],
-        "mots_cles": [
-            "dgsn",
-            "sûreté nationale",
-            "police nationale",
-            "police marocaine",
-            "abdellatif hammouchi",
-            "police judiciaire",
-            "sécurité nationale",
-            "commissaire de police",
-        ],
-    },
-    "budget": {
-        "bandeau": "ACTUALITÉ CIBLÉE DÉTECTÉE\n💰 ALERTE BUDGÉTAIRE : FINANCES PUBLIQUES & BUDGET !",
-        "domaine": "Économie et finances publiques",
-        "profil": "Budget de l'État / Finances publiques",
-        "pertinence": "5/5",
-        "points": [
-            "Orientations budgétaires, recettes ou dépenses publiques.",
-            "Équilibres macroéconomiques (déficit, dette, fiscalité).",
-            "Implications potentielles sur les politiques et investissements publics.",
-        ],
-        "mots_cles": [
-            "loi de finances",
-            "projet de loi de finances",
-            "plf 2027",
-            "budget de l'état",
-            "finances publiques",
-            "déficit budgétaire",
-            "dette publique",
-            "dépenses publiques",
-            "recettes fiscales",
-        ],
-    },
-    "interieur": {
-        "bandeau": "ACTUALITÉ CIBLÉE DÉTECTÉE\n🏛️ ADMINISTRATION TERRITORIALE : MINISTÈRE DE L'INTÉRIEUR !",
-        "domaine": "Gouvernance et administration territoriale",
-        "profil": "Ministère de l'Intérieur / Territoires",
-        "pertinence": "5/5",
-        "points": [
-            "Décision ou orientation liée à l'administration territoriale.",
-            "Rôle des walis, gouverneurs, autorités locales ou collectivités.",
-            "Impact sur la gouvernance et la gestion territoriale.",
-        ],
-        "mots_cles": [
-            "ministère de l'intérieur",
-            "abdelouafi laftit",
-            "administration territoriale",
-            "walis",
-            "gouverneurs",
-            "collectivités territoriales",
-            "autorités locales",
-            "agents d'autorité",
-        ],
-    },
+HISTORIQUE_FILE = "historique_hespress.txt"
+DAILY_JSON_FILE = "articles_du_jour.json"
+
+URLS = [
+    "https://fr.hespress.com",
+    "https://fr.hespress.com/politique",
+    "https://fr.hespress.com/economie",
+    "https://fr.hespress.com/regions",
+]
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/129.0.0.0 Safari/537.36"
+    )
+}
+
+KEYWORDS = {
+    "DGSN": [
+        "dgsn", "surete nationale", "police", "commissaire", "brigade", "securite"
+    ],
+    "BUDGET": [
+        "plf", "loi de finances", "budget", "2027", "lekjaa", "finances", "impot", "fiscalite"
+    ],
+    "INTERIEUR": [
+        "ministere de l'interieur", "interieur", "wali", "walis",
+        "gouverneur", "gouverneurs", "caid", "caids",
+        "administration territoriale", "collectivites territoriales"
+    ],
 }
 
 
-def normaliser(texte: str) -> str:
-    texte = unicodedata.normalize("NFD", texte.lower())
-    texte = "".join(ch for ch in texte if unicodedata.category(ch) != "Mn")
-    texte = re.sub(r"\s+", " ", texte).strip()
-    return texte
+def normalize(text: str) -> str:
+    if not text:
+        return ""
+    text = unicodedata.normalize("NFD", text)
+    text = "".join(c for c in text if unicodedata.category(c) != "Mn")
+    return text.lower().strip()
 
 
-def charger_historique() -> set:
-    if not os.path.exists(FICHIER_HISTORIQUE):
-        return set()
-    with open(FICHIER_HISTORIQUE, "r", encoding="utf-8") as f:
-        return set(line.strip() for line in f if line.strip())
-
-
-def sauvegarder_historique(liens_vus: set) -> None:
-    with open(FICHIER_HISTORIQUE, "w", encoding="utf-8") as f:
-        for lien in sorted(liens_vus):
-            f.write(lien + "\n")
-
-
-def detecter_categorie(texte_normalise: str):
-    for cle, config in CATEGORIES.items():
-        matches = []
-        for mot in config["mots_cles"]:
-            mot_norm = normaliser(mot)
-            if len(mot_norm) <= 4 and mot_norm.isalpha():
-                if re.search(rf"\b{re.escape(mot_norm)}\b", texte_normalise):
-                    matches.append(mot)
-            else:
-                if mot_norm in texte_normalise:
-                    matches.append(mot)
-        if matches:
-            return cle, config, matches
-    return None, None, []
-
-
-def formater_message(titre: str, lien: str, config: dict, matches: list) -> str:
-    points_str = "\n".join(f"- {p}" for p in config["points"])
-    mots_str = ", ".join(matches)
-    return (
-        f"{config['bandeau']}\n"
-        f"- Sujet : {titre}\n"
-        f"- Domaine : {config['domaine']}\n"
-        f"- Mots-clés détectés : {mots_str}\n"
-        f"- Points essentiels :\n"
-        f"{points_str}\n"
-        f"🎯 Pertinence : {config['pertinence']}\n"
-        f"✅ Profil validé : {config['profil']}\n"
-        f"🔗 Lire l'article : [Hespress]({lien})"
-    )
-
-
-def envoyer_alerte(message: str, lien: str) -> bool:
+def send_telegram(text: str) -> bool:
     if not TOKEN or not CHAT_ID:
         print("❌ HESPRESS_TELEGRAM_TOKEN ou TELEGRAM_CHAT_ID manquant.")
         return False
 
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": False,
-        "reply_markup": {
-            "inline_keyboard": [
-                [{"text": "Lire l'article sur Hespress ↗", "url": lien}]
-            ]
-        },
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
     }
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    r = requests.post(url, json=payload, timeout=15)
-    if r.status_code != 200:
-        payload_plain = {
-            "chat_id": CHAT_ID,
-            "text": message.replace("*", "").replace("[Hespress](", "").replace(")", ""),
-        }
-        r = requests.post(url, json=payload_plain, timeout=15)
-    return r.status_code == 200
+    try:
+        r = requests.post(url, json=payload, timeout=15)
+        if r.status_code != 200:
+            print(f"❌ Erreur Telegram ({r.status_code}): {r.text}")
+            return False
+        return True
+    except Exception as e:
+        print(f"❌ Exception Telegram: {e}")
+        return False
 
 
-def verifier_hespress() -> None:
-    print("🔍 Analyse Hespress en cours (DGSN / Budget / Ministère de l'Intérieur)...")
-    liens_vus = charger_historique()
-    nouveaux_ajouts = False
+def load_historique() -> set:
+    if not os.path.exists(HISTORIQUE_FILE):
+        return set()
+    with open(HISTORIQUE_FILE, "r", encoding="utf-8") as f:
+        return {line.strip() for line in f if line.strip()}
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
-        "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8",
-    }
 
-    urls_a_verifier = [
-        "https://fr.hespress.com/",
-        "https://fr.hespress.com/politique",
-        "https://fr.hespress.com/economie",
-        "https://fr.hespress.com/regions",
-    ]
+def save_historique(urls: set) -> None:
+    with open(HISTORIQUE_FILE, "w", encoding="utf-8") as f:
+        for u in sorted(urls):
+            f.write(u + "\n")
 
-    for url_page in urls_a_verifier:
+
+def load_daily_articles() -> list:
+    if not os.path.exists(DAILY_JSON_FILE):
+        return []
+    try:
+        with open(DAILY_JSON_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def save_daily_articles(articles: list) -> None:
+    with open(DAILY_JSON_FILE, "w", encoding="utf-8") as f:
+        json.dump(articles, f, ensure_ascii=False, indent=2)
+
+
+def match_keyword(text: str):
+    norm_text = normalize(text)
+    for category, kw_list in KEYWORDS.items():
+        for kw in kw_list:
+            if kw in norm_text:
+                return category, kw
+    return None, None
+
+
+def extract_article_summary(article_url: str, fallback_title: str) -> str:
+    try:
+        resp = requests.get(article_url, headers=HEADERS, timeout=12)
+        if resp.status_code != 200:
+            return fallback_title
+        soup = BeautifulSoup(resp.text, "html.parser")
+        paragraphs = soup.select("div.article-content p, article p")
+        clean_paras = [
+            p.get_text(" ", strip=True)
+            for p in paragraphs
+            if len(p.get_text(strip=True)) > 45
+        ]
+        if not clean_paras:
+            return fallback_title
+        summary = " ".join(clean_paras[:2])
+        if len(summary) > 220:
+            summary = summary[:217].rsplit(" ", 1)[0] + "..."
+        return summary
+    except Exception:
+        return fallback_title
+
+
+def run_realtime() -> None:
+    print("🔍 Analyse Hespress en cours (Veille rapide)...")
+    historique = load_historique()
+    daily_articles = load_daily_articles()
+    existing_daily_urls = {item["url"] for item in daily_articles}
+
+    maroc_tz = timezone(timedelta(hours=1))
+    now_str = datetime.now(maroc_tz).strftime("%H:%M")
+
+    found_count = 0
+
+    for page_url in URLS:
         try:
-            resp = requests.get(url_page, headers=headers, timeout=15)
+            resp = requests.get(page_url, headers=HEADERS, timeout=15)
             if resp.status_code != 200:
-                print(f"⚠️ Accès impossible ({resp.status_code}) sur {url_page}")
+                print(f"⚠️ Accès impossible à {page_url} ({resp.status_code})")
+                continue
+        except Exception as e:
+            print(f"⚠️ Erreur réseau sur {page_url}: {e}")
+            continue
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for a in soup.find_all("a", href=True):
+            href = a["href"].strip()
+            title = a.get_text(" ", strip=True)
+
+            if not href.startswith("https://fr.hespress.com/") or not href.endswith(".html"):
+                continue
+            if len(title) < 25 or href in historique:
                 continue
 
-            soup = BeautifulSoup(resp.text, "html.parser")
-            for a in soup.find_all("a", href=True):
-                titre = re.sub(r"\s+", " ", a.get_text()).strip()
-                if len(titre) < 15:
-                    continue
+            category, matched_kw = match_keyword(f"{title} {href}")
+            if not category:
+                continue
 
-                href = a["href"].strip()
-                if href.startswith("/"):
-                    lien = "https://fr.hespress.com" + href
-                elif href.startswith("http"):
-                    lien = href
-                else:
-                    continue
+            print(f"📰 [{category}] ({matched_kw}) Article détecté : {title}")
+            summary = extract_article_summary(href, title)
 
-                if "hespress.com" not in lien or lien in liens_vus:
-                    continue
+            safe_title = html.escape(title)
+            safe_summary = html.escape(summary)
+            safe_kw = html.escape(matched_kw)
 
-                texte_norm = normaliser(f"{titre} {lien}")
-                cle, config, matches = detecter_categorie(texte_norm)
+            msg = (
+                f"🚨 <b>ALERTE HESPRESS [{category}]</b>\n"
+                f"🔑 <b>Mot-clé :</b> <code>{safe_kw}</code> | 🕒 {now_str}\n\n"
+                f"📌 <b>{safe_title}</b>\n"
+                f"📝 <i>{safe_summary}</i>\n\n"
+                f"🔗 <a href=\"{href}\">Lire l'article complet</a>"
+            )
 
-                if config:
-                    print(f"📰 [{cle.upper()}] Article détecté : {titre}")
-                    msg = formater_message(titre, lien, config, matches)
-                    if envoyer_alerte(msg, lien):
-                        print("🚀 Notification envoyée sur Telegram !")
-                        liens_vus.add(lien)
-                        nouveaux_ajouts = True
+            if send_telegram(msg):
+                historique.add(href)
+                found_count += 1
+                if href not in existing_daily_urls:
+                    daily_articles.append({
+                        "heure": now_str,
+                        "axe": category,
+                        "mot_cle": matched_kw,
+                        "titre": title,
+                        "resume": summary,
+                        "url": href,
+                    })
+                    existing_daily_urls.add(href)
 
-        except Exception as e:
-            print(f"❌ Erreur sur {url_page} : {e}")
+    save_historique(historique)
+    save_daily_articles(daily_articles)
 
-    if nouveaux_ajouts:
-        sauvegarder_historique(liens_vus)
-        print(f"💾 {len(liens_vus)} lien(s) enregistré(s) dans {FICHIER_HISTORIQUE}.")
-    else:
+    if found_count == 0:
         print("ℹ️ Aucun nouvel article correspondant détecté.")
+    else:
+        print(f"✅ {found_count} nouvelle(s) alerte(s) envoyée(s).")
+
+
+def run_digest() -> None:
+    print("📊 Génération du tableau de synthèse de 03h00...")
+    daily_articles = load_daily_articles()
+
+    maroc_tz = timezone(timedelta(hours=1))
+    date_str = datetime.now(maroc_tz).strftime("%d/%m/%Y")
+
+    if not daily_articles:
+        msg = (
+            f"🌙 <b>SYNTHÈSE VEILLE HESPRESS — {date_str} (03h00)</b>\n\n"
+            f"ℹ️ Aucune nouvelle publication sur tes axes (DGSN / Budget / Intérieur) durant ce cycle."
+        )
+        send_telegram(msg)
+        return
+
+    header = (
+        f"🌙 <b>TABLEAU DE SYNTHÈSE HESPRESS — {date_str} (03h00)</b>\n"
+        f"📊 <b>Total :</b> {len(daily_articles)} actualité(s) retenue(s)\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+
+    blocks = []
+    for idx, item in enumerate(daily_articles, start=1):
+        axe = html.escape(item.get("axe", ""))
+        kw = html.escape(item.get("mot_cle", ""))
+        heure = html.escape(item.get("heure", ""))
+        titre = html.escape(item.get("titre", ""))
+        resume = html.escape(item.get("resume", ""))
+        url = item.get("url", "")
+
+        block = (
+            f"<b>#{idx} | [{axe}] • Mot-clé :</b> <code>{kw}</code> ({heure})\n"
+            f"📰 <b>Info :</b> {titre}\n"
+            f"📝 <b>Résumé :</b> {resume}\n"
+            f"🔗 <a href=\"{url}\">Source Hespress</a>\n"
+            f"────────────────────\n"
+        )
+        blocks.append(block)
+
+    current_msg = header
+    all_sent = True
+    for block in blocks:
+        if len(current_msg) + len(block) > 3800:
+            if not send_telegram(current_msg):
+                all_sent = False
+            current_msg = block
+        else:
+            current_msg += block
+
+    if current_msg.strip():
+        if not send_telegram(current_msg):
+            all_sent = False
+
+    if all_sent:
+        save_daily_articles([])
+        print("✅ Tableau de synthèse envoyé et fichier tampon réinitialisé.")
+    else:
+        print("⚠️ Échec partiel de l'envoi ; conservation des articles dans le fichier tampon.")
 
 
 if __name__ == "__main__":
-    verifier_hespress()
+    mode = sys.argv[1] if len(sys.argv) > 1 else "realtime"
+    if mode == "digest":
+        run_digest()
+    else:
+        run_realtime()
