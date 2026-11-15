@@ -29,9 +29,14 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python hespress_bot.py
 
-      - name: Sauvegarder l'historique Hespress
+    - name: Sauvegarder l'historique Hespress
         run: |
           git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          touch historique_hespress.txt
+          git add historique_hespress.txt
+          git diff-index --quiet HEAD || git commit -m "Mise à jour historique Hespress"
+          git push
           git config --local user.name "GitHub Action"
           git add historique_hespress.txt
           git diff-index --quiet HEAD || git commit -m "Mise à jour historique Hespress"
