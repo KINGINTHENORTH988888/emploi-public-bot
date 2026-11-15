@@ -30,7 +30,7 @@ HEADERS = {
 
 KEYWORDS = {
     "DGSN": [
-        "dgsn", "surete nationale", "police", "commissaire", "brigade", "securite"
+        "dgsn", "surete nationale", "police", "commissaire", "brigade", "securite publique"
     ],
     "BUDGET": [
         "plf", "loi de finances", "budget", "2027", "lekjaa", "finances", "impot", "fiscalite"
@@ -127,8 +127,8 @@ def extract_article_summary(article_url: str, fallback_title: str) -> str:
         if not clean_paras:
             return fallback_title
         summary = " ".join(clean_paras[:2])
-        if len(summary) > 220:
-            summary = summary[:217].rsplit(" ", 1)[0] + "..."
+        if len(summary) > 140:
+            summary = summary[:137].rsplit(" ", 1)[0] + "..."
         return summary
     except Exception:
         return fallback_title
@@ -207,6 +207,13 @@ def run_realtime() -> None:
         print(f"✅ {found_count} nouvelle(s) alerte(s) envoyée(s).")
 
 
+def fit(text: str, width: int) -> str:
+    clean = " ".join((text or "").split())
+    if len(clean) <= width:
+        return clean.ljust(width)
+    return (clean[: width - 1] + "…").ljust(width)
+
+
 def run_digest() -> None:
     print("📊 Génération du tableau de synthèse de 03h00...")
     daily_articles = load_daily_articles()
@@ -215,56 +222,58 @@ def run_digest() -> None:
     date_str = datetime.now(maroc_tz).strftime("%d/%m/%Y")
 
     if not daily_articles:
-        msg = (
-            f"🌙 <b>SYNTHÈSE VEILLE HESPRESS — {date_str} (03h00)</b>\n\n"
-            f"ℹ️ Aucune nouvelle publication sur tes axes (DGSN / Budget / Intérieur) durant ce cycle."
+        send_telegram(
+            f"🌙 <b>SYNTHÈSE HESPRESS — {date_str} (03h00)</b>\n"
+            f"ℹ️ Aucune nouvelle publication sur tes axes durant ce cycle."
         )
-        send_telegram(msg)
         return
 
-    header = (
-        f"🌙 <b>TABLEAU DE SYNTHÈSE HESPRESS — {date_str} (03h00)</b>\n"
-        f"📊 <b>Total :</b> {len(daily_articles)} actualité(s) retenue(s)\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+    w_kw, w_info, w_res = 12, 24, 28
+    sep = f"+{'-' * (w_kw + 2)}+{'-' * (w_info + 2)}+{'-' * (w_res + 2)}+"
+    header_row = (
+        f"| {fit('MOT-CLE', w_kw)} "
+        f"| {fit('INFO', w_info)} "
+        f"| {fit('RESUME', w_res)} |"
     )
 
-    blocks = []
+    rows = []
+    links = []
     for idx, item in enumerate(daily_articles, start=1):
-        axe = html.escape(item.get("axe", ""))
-        kw = html.escape(item.get("mot_cle", ""))
-        heure = html.escape(item.get("heure", ""))
-        titre = html.escape(item.get("titre", ""))
-        resume = html.escape(item.get("resume", ""))
+        kw = fit(item.get("mot_cle", ""), w_kw)
+        info = fit(item.get("titre", ""), w_info)
+        res = fit(item.get("resume", ""), w_res)
         url = item.get("url", "")
+        rows.append(f"| {kw} | {info} | {res} |")
+        links.append(f"#{idx} : <a href=\"{html.escape(url)}\">Lien</a>")
 
-        block = (
-            f"<b>#{idx} | [{axe}] • Mot-clé :</b> <code>{kw}</code> ({heure})\n"
-            f"📰 <b>Info :</b> {titre}\n"
-            f"📝 <b>Résumé :</b> {resume}\n"
-            f"🔗 <a href=\"{url}\">Source Hespress</a>\n"
-            f"────────────────────\n"
+    table_block = "<pre>\n" + "\n".join([sep, header_row, sep] + rows + [sep]) + "\n</pre>"
+    links_block = "\n<b>Liens :</b> " + " | ".join(links)
+
+    msg = (
+        f"🌙 <b>TABLEAU DE SYNTHÈSE HESPRESS — {date_str} (03h00)</b>\n"
+        f"📊 <b>Total :</b> {len(daily_articles)} actualité(s)\n\n"
+        f"{table_block}"
+        f"{links_block}"
+    )
+
+    if len(msg) > 4000:
+        mid = len(rows) // 2
+        part1 = (
+            f"🌙 <b>TABLEAU DE SYNTHÈSE HESPRESS — {date_str} (03h00) [1/2]</b>\n"
+            f"<pre>\n" + "\n".join([sep, header_row, sep] + rows[:mid] + [sep]) + "\n</pre>"
         )
-        blocks.append(block)
-
-    current_msg = header
-    all_sent = True
-    for block in blocks:
-        if len(current_msg) + len(block) > 3800:
-            if not send_telegram(current_msg):
-                all_sent = False
-            current_msg = block
-        else:
-            current_msg += block
-
-    if current_msg.strip():
-        if not send_telegram(current_msg):
-            all_sent = False
-
-    if all_sent:
-        save_daily_articles([])
-        print("✅ Tableau de synthèse envoyé et fichier tampon réinitialisé.")
+        part2 = (
+            f"🌙 <b>TABLEAU DE SYNTHÈSE HESPRESS — {date_str} (03h00) [2/2]</b>\n"
+            f"<pre>\n" + "\n".join([sep, header_row, sep] + rows[mid:] + [sep]) + "\n</pre>"
+            f"{links_block}"
+        )
+        ok = send_telegram(part1) and send_telegram(part2)
     else:
-        print("⚠️ Échec partiel de l'envoi ; conservation des articles dans le fichier tampon.")
+        ok = send_telegram(msg)
+
+    if ok:
+        save_daily_articles([])
+        print("✅ Tableau de synthèse envoyé et tampon réinitialisé.")
 
 
 if __name__ == "__main__":
