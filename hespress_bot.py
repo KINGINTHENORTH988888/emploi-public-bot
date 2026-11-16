@@ -33,7 +33,7 @@ KEYWORDS = {
         "dgsn", "surete nationale", "police", "commissaire", "brigade", "securite publique"
     ],
     "BUDGET": [
-        "plf", "loi de finances", "budget", "2027", "lekjaa", "finances", "impot", "fiscalite"
+        "plf", "loi de finances", "budget", "lekjaa", "finances", "impot", "fiscalite"
     ],
     "INTERIEUR": [
         "ministere de l'interieur", "interieur", "wali", "walis",
