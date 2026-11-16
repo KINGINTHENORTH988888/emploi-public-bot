@@ -2,9 +2,7 @@ name: Bot Hespress Veille
 
 on:
   schedule:
-    # Veille rapide toutes les 5 minutes
     - cron: '*/5 * * * *'
-    # Tableau de synthèse à 03h00 heure du Maroc (02h00 UTC)
     - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
@@ -27,6 +25,8 @@ jobs:
     steps:
       - name: Récupérer le dépôt
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Installer Python
         uses: actions/setup-python@v5
@@ -60,6 +60,8 @@ jobs:
           touch historique_hespress.txt
           [ -f articles_du_jour.json ] || echo "[]" > articles_du_jour.json
           git add historique_hespress.txt articles_du_jour.json
-          git diff-index --quiet HEAD || git commit -m "Mise à jour veille Hespress (${{ steps.set_mode.outputs.mode }})"
-          git pull --rebase origin main
-          git push
+          if ! git diff-index --quiet HEAD; then
+            git commit -m "Mise à jour veille Hespress (${{ steps.set_mode.outputs.mode }})"
+            git pull --rebase origin main || git pull --no-rebase origin main
+            git push origin main
+          fi
