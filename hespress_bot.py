@@ -4,6 +4,7 @@ import re
 import sys
 import unicodedata
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
@@ -124,13 +125,26 @@ def fetch_hespress_articles() -> list[dict]:
     seen_urls = set()
 
     for a in soup.select("a[href]"):
-        href = (a.get("href") or "").strip()
+        raw_href = (a.get("href") or "").strip()
+        if not raw_href or raw_href.startswith("#") or raw_href.startswith("mailto:") or raw_href.startswith("javascript:"):
+            continue
+
+        href = urljoin(URL, raw_href)
         if not href.startswith("https://fr.hespress.com/"):
             continue
-        if href in seen_urls or "/category/" in href or "/tag/" in href or href.rstrip("/") == "https://fr.hespress.com":
+
+        clean_href = href.split("?")[0].rstrip("/")
+        if (
+            clean_href in seen_urls
+            or clean_href == "https://fr.hespress.com"
+            or "/category/" in clean_href
+            or "/tag/" in clean_href
+            or "/author/" in clean_href
+        ):
             continue
-        # Les articles Hespress ont généralement un slug avec un identifiant numérique
-        if not re.search(r"-\d+\.html$", href):
+
+        # Vérifie que l'URL ressemble bien à un article (slug avec chiffres ou chemin d'article)
+        if not re.search(r"-\d+(\.html)?$", clean_href) and not re.search(r"/\d{4}/\d{2}/", clean_href):
             continue
 
         title = re.sub(r"\s+", " ", a.get_text(" ", strip=True)).strip()
@@ -144,11 +158,11 @@ def fetch_hespress_articles() -> list[dict]:
             if p:
                 summary = re.sub(r"\s+", " ", p.get_text(" ", strip=True)).strip()
 
-        seen_urls.add(href)
+        seen_urls.add(clean_href)
         articles.append({
             "titre": title,
             "resume": summary,
-            "url": href,
+            "url": clean_href,
         })
 
     return articles
@@ -217,65 +231,4 @@ def build_essay_digest(items: list[dict], date_str: str) -> str:
         grouped.setdefault(axe, []).append(it)
 
     lines = [
-        f"📝 <b>NOTE DE SYNTHÈSE HESPRESS — {date_str}</b>",
-        f"<i>Vue d'ensemble des publications ciblées ({len(items)} article(s) retenu(s)) :</i>\n",
-        "Sur la période écoulée, la veille a regroupé les actualités marquantes autour de vos axes prioritaires afin d'en dégager les grandes lignes :",
-    ]
-
-    axe_labels = {
-        "DGSN": "Sécurité & DGSN",
-        "BUDGET": "Budget, PLF & Fiscalité",
-        "INTERIEUR": "Administration & Ministère de l'Intérieur",
-        "AUTRE": "Autres points suivis",
-    }
-
-    for axe, label in axe_labels.items():
-        entries = grouped.get(axe, [])
-        if not entries:
-            continue
-        titles_part = " ; ".join(
-            f"« {e['titre']} » ({e['heure']}, mot-clé <i>{e['mot_cle']}</i>)"
-            for e in entries
-        )
-        details_part = " ".join(
-            e["resume"] for e in entries if e.get("resume")
-        )
-        paragraph = f"\n<b>{label} :</b> L'attention s'est portée sur {titles_part}."
-        if details_part:
-            paragraph += f" {details_part}"
-        lines.append(paragraph)
-
-    lines.append("\n<b>Sources & liens directs :</b>")
-    for idx, it in enumerate(items, start=1):
-        lines.append(f"{idx}. [{it.get('axe', '')}] <a href=\"{it['url']}\">{it['titre']}</a>")
-
-    return "\n".join(lines)
-
-
-def run_digest() -> None:
-    print("📝 Génération de la synthèse rédigée...")
-    now = morocco_now()
-    date_str = now.strftime("%d/%m/%Y")
-    buffer = load_digest_buffer()
-
-    if not buffer:
-        msg = (
-            f"📝 <b>NOTE DE SYNTHÈSE HESPRESS — {date_str}</b>\n\n"
-            f"Aucune nouvelle publication ciblée n'a été enregistrée sur ce cycle."
-        )
-        send_telegram(msg)
-        return
-
-    msg = build_essay_digest(buffer, date_str)
-    if send_telegram(msg):
-        # On vide le tampon uniquement après un envoi réussi
-        save_digest_buffer([])
-        print("✅ Synthèse envoyée et tampon réinitialisé.")
-
-
-if __name__ == "__main__":
-    mode = sys.argv[1].strip().lower() if len(sys.argv) > 1 else "realtime"
-    if mode == "digest":
-        run_digest()
-    else:
-        run_realtime()
+        f"📝 <b>NOTE DE SYNTHÈSE HESPRESS
