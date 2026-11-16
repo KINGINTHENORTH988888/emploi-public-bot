@@ -231,4 +231,4 @@ def build_essay_digest(items: list[dict], date_str: str) -> str:
         grouped.setdefault(axe, []).append(it)
 
     lines = [
-        f"📝 <b>NOTE DE SYNTHÈSE HESPRESS
+        f"📝 <b>NOTE DE SYNTHÈSE HESPRESS — {date_str}</b>",
