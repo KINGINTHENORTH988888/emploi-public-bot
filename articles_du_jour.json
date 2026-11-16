@@ -1,1 +1,26 @@
-[]
+[
+  {
+    "heure": "10:15",
+    "axe": "DGSN",
+    "mot_cle": "surete nationale",
+    "titre": "Opérations sécuritaires et lutte contre la criminalité",
+    "resume": "Les services de sûreté nationale ont mené plusieurs interventions ciblées visant à renforcer la sécurité urbaine et la prévention.",
+    "url": "https://fr.hespress.com/"
+  },
+  {
+    "heure": "14:40",
+    "axe": "BUDGET",
+    "mot_cle": "loi de finances",
+    "titre": "Débats autour des orientations budgétaires et des équilibres financiers",
+    "resume": "Les discussions ont porté sur la mobilisation des ressources publiques, le soutien à l'investissement et la maîtrise des dépenses.",
+    "url": "https://fr.hespress.com/"
+  },
+  {
+    "heure": "18:20",
+    "axe": "INTERIEUR",
+    "mot_cle": "administration territoriale",
+    "titre": "Coordination territoriale et suivi des projets locaux",
+    "resume": "Les autorités territoriales poursuivent l'accompagnement des programmes de développement local et la proximité avec les citoyens.",
+    "url": "https://fr.hespress.com/"
+  }
+]
