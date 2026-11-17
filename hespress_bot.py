@@ -15,7 +15,6 @@ DIGEST_FILE = "articles_du_jour.json"
 TELEGRAM_TOKEN = os.environ.get("HESPRESS_TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Mots-clés ciblés sans faux positifs ("2027" seul retiré)
 KEYWORDS = {
     "DGSN": [
         "dgsn", "surete nationale", "police", "commissaire",
@@ -41,7 +40,6 @@ def normalize(text: str) -> str:
 
 
 def morocco_now() -> datetime:
-    # UTC+1 (heure standard Maroc)
     return datetime.now(timezone(timedelta(hours=1)))
 
 
@@ -78,7 +76,7 @@ def save_digest_buffer(items: list[dict]) -> None:
 
 def send_telegram(text: str) -> bool:
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("⚠️ Variables HESPRESS_TELEGRAM_TOKEN ou TELEGRAM_CHAT_ID manquantes.")
+        print("Variables HESPRESS_TELEGRAM_TOKEN ou TELEGRAM_CHAT_ID manquantes.")
         return False
     api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
@@ -90,11 +88,11 @@ def send_telegram(text: str) -> bool:
     try:
         r = requests.post(api_url, json=payload, timeout=15)
         if not r.ok:
-            print(f"❌ Erreur Telegram ({r.status_code}) : {r.text}")
+            print(f"Erreur Telegram ({r.status_code}) : {r.text}")
             return False
         return True
     except Exception as e:
-        print(f"❌ Exception Telegram : {e}")
+        print(f"Exception Telegram : {e}")
         return False
 
 
@@ -102,7 +100,6 @@ def match_keyword(haystack_norm: str) -> tuple[str | None, str | None]:
     for axe, words in KEYWORDS.items():
         for w in words:
             w_norm = normalize(w)
-            # Correspondance mot entier / expression pour éviter les sous-chaînes piégeuses
             pattern = r"(?<![a-z0-9])" + re.escape(w_norm) + r"(?![a-z0-9])"
             if re.search(pattern, haystack_norm):
                 return axe, w
@@ -143,7 +140,6 @@ def fetch_hespress_articles() -> list[dict]:
         ):
             continue
 
-        # Vérifie que l'URL ressemble bien à un article (slug avec chiffres ou chemin d'article)
         if not re.search(r"-\d+(\.html)?$", clean_href) and not re.search(r"/\d{4}/\d{2}/", clean_href):
             continue
 
@@ -169,14 +165,14 @@ def fetch_hespress_articles() -> list[dict]:
 
 
 def run_realtime() -> None:
-    print("🔍 Analyse Hespress en cours (Veille rapide)...")
+    print("Analyse Hespress en cours...")
     history = load_history()
     buffer = load_digest_buffer()
 
     try:
         articles = fetch_hespress_articles()
     except Exception as e:
-        print(f"❌ Erreur lors du scraping Hespress : {e}")
+        print(f"Erreur scraping Hespress : {e}")
         return
 
     new_history_urls = []
@@ -194,16 +190,15 @@ def run_realtime() -> None:
             continue
 
         titre_clean = art["titre"][:180]
-        resume_clean = (art["resume"][:260] + "...") if len(art["resume"]) > 260 else art["resume"]
+        resume_clean = (art["resume"][:240] + "...") if len(art["resume"]) > 240 else art["resume"]
 
         msg = (
-            f"🚨 <b>ALERTE HESPRESS [{axe}]</b>\n"
-            f"🔑 Mot-clé : <code>{kw}</code> | 🕒 {now_str}\n\n"
-            f"📌 <b>{titre_clean}</b>\n"
+            f"<b>[{axe}]</b> ({kw} — {now_str})\n"
+            f"<b>{titre_clean}</b>\n"
         )
         if resume_clean:
-            msg += f"📝 <i>{resume_clean}</i>\n"
-        msg += f"\n🔗 <a href=\"{url}\">Lire l'article complet</a>"
+            msg += f"{resume_clean}\n"
+        msg += f"<a href=\"{url}\">{url}</a>"
 
         if send_telegram(msg):
             alerts_sent += 1
@@ -221,14 +216,42 @@ def run_realtime() -> None:
         save_history(new_history_urls)
         save_digest_buffer(buffer)
 
-    print(f"✅ Veille terminée : {alerts_sent} nouvelle(s) alerte(s) envoyée(s).")
+    print(f"Terminé : {alerts_sent} nouvelle(s) alerte(s) envoyée(s).")
 
 
-def build_essay_digest(items: list[dict], date_str: str) -> str:
-    grouped = {"DGSN": [], "BUDGET": [], "INTERIEUR": [], "AUTRE": []}
-    for it in items:
-        axe = it.get("axe", "AUTRE")
-        grouped.setdefault(axe, []).append(it)
-
+def build_simple_digest(items: list[dict], date_str: str) -> str:
     lines = [
-        f"📝 <b>NOTE DE SYNTHÈSE HESPRESS — {date_str}</b>",
+        f"<b>Résumé Hespress — {date_str}</b>",
+        f"Total : {len(items)} article(s)\n",
+    ]
+    for idx, it in enumerate(items, start=1):
+        axe = it.get("axe", "AUTRE")
+        heure = it.get("heure", "")
+        titre = it.get("titre", "")
+        url = it.get("url", "")
+        lines.append(f"{idx}. <b>[{axe}]</b> {titre} ({heure})")
+        if url:
+            lines.append(f"   <a href=\"{url}\">{url}</a>")
+    return "\n".join(lines)
+
+
+def run_digest() -> None:
+    now = morocco_now()
+    date_str = now.strftime("%d/%m/%Y")
+    buffer = load_digest_buffer()
+
+    if not buffer:
+        send_telegram(f"<b>Résumé Hespress — {date_str}</b>\nAucun nouvel article.")
+        return
+
+    msg = build_simple_digest(buffer, date_str)
+    if send_telegram(msg):
+        save_digest_buffer([])
+
+
+if __name__ == "__main__":
+    mode = sys.argv[1].strip().lower() if len(sys.argv) > 1 else "realtime"
+    if mode == "digest":
+        run_digest()
+    else:
+        run_realtime()
